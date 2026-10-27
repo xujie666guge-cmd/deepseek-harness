@@ -50,10 +50,10 @@ echo ""
 
 # ---------- 1. 检查电脑 ----------
 arch=$(uname -m)
-[ "$arch" = "x86_64" ] || die "这台 Mac 不是 Intel 芯片（检测到 $arch），这些安装包是给 Intel Mac 准备的。"
+[ "$arch" = "x86_64" ] || die "这台 Mac 不是 Intel 芯片（检测到 ${arch}），这些安装包是给 Intel Mac 准备的。"
 os_version=$(sw_vers -productVersion)
 os_major=${os_version%%.*}
-[ "$os_major" -ge 11 ] || die "系统版本是 macOS $os_version，太旧了。请先到“系统设置 → 软件更新”升级（建议 macOS 14 或更新）。"
+[ "$os_major" -ge 11 ] || die "系统版本是 macOS ${os_version}，太旧了。请先到“系统设置 → 软件更新”升级（建议 macOS 14 或更新）。"
 echo "✅ Intel 芯片，macOS $os_version"
 [ -d "$PKG" ] || die "没找到“安装包”文件夹，请把整个“拷到Mac”文件夹完整拷过来。"
 
@@ -93,7 +93,7 @@ if [ -f "$HERE/SHA256SUMS.txt" ]; then
       echo "   ✔ $file"
     else
       bad_files="${bad_files}|${file}|"
-      echo "   ⚠️  损坏：$file（对应软件会跳过，从 U 盘重新拷一次这个文件即可）"
+      echo "   ⚠️  损坏：${file}（对应软件会跳过，从 U 盘重新拷一次这个文件即可）"
     fi
   done < "$HERE/SHA256SUMS.txt"
 else
@@ -113,7 +113,7 @@ place_app() {
   if [ -d "$target" ]; then
     old_v="$(plist_value "$target" CFBundleShortVersionString) ($(plist_value "$target" CFBundleVersion))"
     if [ "$old_v" = "$new_v" ]; then
-      skip "$label 已是这个版本 $new_v，跳过"
+      skip "$label 已是这个版本 ${new_v}，跳过"
       return 0
     fi
     # 只在它正在运行时才去关，避免弹出“找不到应用”的对话框
@@ -124,12 +124,12 @@ place_app() {
       sleep 1
     fi
     if ! $SUDO mv "$target" "$HOME/.Trash/${name%.app} 旧版 $(date +%Y%m%d-%H%M%S).app" 2>/dev/null; then
-      bad "$label：旧版本移不走，请手动把“应用程序”里的 $name 拖到废纸篓后再运行"
+      bad "${label}：旧版本移不走，请手动把“应用程序”里的 $name 拖到废纸篓后再运行"
       return 1
     fi
   fi
   if ! $SUDO ditto "$src" "$target"; then
-    bad "$label：复制到“应用程序”失败"
+    bad "${label}：复制到“应用程序”失败"
     return 1
   fi
   $SUDO xattr -dr com.apple.quarantine "$target" 2>/dev/null
@@ -142,15 +142,15 @@ install_dmg() {
   echo ""
   echo "▶ $label"
   if [ "$os_major" -lt "$min_major" ]; then
-    skip "$label：需要 macOS $min_major 或更新（当前 $os_version），升级系统后再运行一次"
+    skip "${label}：需要 macOS $min_major 或更新（当前 ${os_version}），升级系统后再运行一次"
     return
   fi
-  if ! file_ok "$file"; then bad "$label：安装包缺失或损坏（$file）"; return; fi
+  if ! file_ok "$file"; then bad "${label}：安装包缺失或损坏（${file}）"; return; fi
   mnt=$(mktemp -d /tmp/oneclick.XXXXXX)
   # yes 用来自动同意少数 dmg 自带的许可协议
-  if ! yes | hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$PKG/$file" >/dev/null 2>&1; then
+  if ! yes 2>/dev/null | hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$PKG/$file" >/dev/null 2>&1; then
     rmdir "$mnt" 2>/dev/null
-    bad "$label：打不开安装包"
+    bad "${label}：打不开安装包"
     return
   fi
   for app in "$mnt"/*.app; do
@@ -158,7 +158,7 @@ install_dmg() {
     found=1
     place_app "$label" "$app"
   done
-  [ "$found" = 1 ] || bad "$label：安装包里没找到应用程序"
+  [ "$found" = 1 ] || bad "${label}：安装包里没找到应用程序"
   hdiutil detach "$mnt" -quiet >/dev/null 2>&1 || hdiutil detach "$mnt" -force -quiet >/dev/null 2>&1
   rmdir "$mnt" 2>/dev/null
 }
@@ -169,13 +169,13 @@ install_zip() {
   echo ""
   echo "▶ $label"
   if [ "$os_major" -lt "$min_major" ]; then
-    skip "$label：需要 macOS $min_major 或更新（当前 $os_version）"
+    skip "${label}：需要 macOS $min_major 或更新（当前 ${os_version}）"
     return
   fi
-  if ! file_ok "$file"; then bad "$label：安装包缺失或损坏（$file）"; return; fi
+  if ! file_ok "$file"; then bad "${label}：安装包缺失或损坏（${file}）"; return; fi
   tmp=$(mktemp -d /tmp/oneclick.XXXXXX)
   if ! ditto -x -k "$PKG/$file" "$tmp"; then
-    bad "$label：解压失败"
+    bad "${label}：解压失败"
     return
   fi
   for app in "$tmp"/*.app; do
@@ -183,7 +183,7 @@ install_zip() {
     found=1
     place_app "$label" "$app"
   done
-  [ "$found" = 1 ] || bad "$label：压缩包里没找到应用程序"
+  [ "$found" = 1 ] || bad "${label}：压缩包里没找到应用程序"
 }
 
 # Kimi Code 命令行：按官方安装脚本的做法放到 ~/.kimi-code/bin/kimi 并加进 PATH
@@ -193,22 +193,22 @@ install_kimi() {
   local label="Kimi Code（命令行）" dir="$HOME/.kimi-code" tmp bin rc line
   echo ""
   echo "▶ $label"
-  if ! file_ok "$KIMI_FILE"; then bad "$label：安装包缺失或损坏（$KIMI_FILE）"; return; fi
+  if ! file_ok "$KIMI_FILE"; then bad "${label}：安装包缺失或损坏（${KIMI_FILE}）"; return; fi
   if [ -f "$dir/bin/kimi" ] && [ "$(shasum -a 256 "$dir/bin/kimi" | awk '{print $1}')" = "$KIMI_SHA" ]; then
     skip "$label 已是 2.3.3，跳过"
     return
   fi
   tmp=$(mktemp -d /tmp/oneclick.XXXXXX)
-  tar -xzf "$PKG/$KIMI_FILE" -C "$tmp" 2>/dev/null || { bad "$label：解压失败"; return; }
+  tar -xzf "$PKG/$KIMI_FILE" -C "$tmp" 2>/dev/null || { bad "${label}：解压失败"; return; }
   # 在解压出的文件里找校验值对得上的那个程序
   bin=""
   while IFS= read -r f; do
     if [ "$(shasum -a 256 "$f" | awk '{print $1}')" = "$KIMI_SHA" ]; then bin="$f"; break; fi
   done < <(find "$tmp" -type f -size +1M)
-  [ -n "$bin" ] || { bad "$label：程序校验不通过"; return; }
+  [ -n "$bin" ] || { bad "${label}：程序校验不通过"; return; }
   mkdir -p "$dir/bin"
   [ -f "$dir/bin/kimi" ] && cp "$dir/bin/kimi" "$dir/bin/kimi.bak"
-  install -m 0755 "$bin" "$dir/bin/kimi" || { bad "$label：复制失败"; return; }
+  install -m 0755 "$bin" "$dir/bin/kimi" || { bad "${label}：复制失败"; return; }
   xattr -d com.apple.quarantine "$dir/bin/kimi" 2>/dev/null
   # 和官方安装脚本一致：标记国内渠道（首次登录后以登录信息为准）
   [ -f "$dir/region" ] || printf 'mainland-cn\n' > "$dir/region"
@@ -235,11 +235,11 @@ else
   bad "DeepSeek Harness：没找到安装包"
 fi
 install_kimi
-install_dmg "Antigravity"         "Antigravity-2.26.0-Intel.dmg"     12
+install_dmg "Antigravity"         "Antigravity-2.26.0-Intel.dmg"     13
 install_dmg "Antigravity IDE"     "Antigravity-IDE-2.5.5-Intel.dmg"  12
-install_dmg "ChatGPT（含 Codex）" "ChatGPT-Codex-Intel.dmg"          14
+install_dmg "ChatGPT（含 Codex）" "ChatGPT-Codex-Intel.dmg"          13
 install_dmg "Grok Bot"            "Grok-Bot-0.77.0-Intel.dmg"        12
-install_zip "Claude"              "Claude-3.6556.2-Universal.zip"    11
+install_zip "Claude"              "Claude-3.6556.2-Universal.zip"    13
 
 # ---------- 4. 结果 ----------
 echo ""
