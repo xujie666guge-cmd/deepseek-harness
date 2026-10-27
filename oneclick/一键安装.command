@@ -5,8 +5,13 @@
 # 双击运行：检查电脑 → 校验安装包 → 逐个装进“应用程序” → 解除隔离 → 打开“应用程序”
 # · 某一个装失败不影响其他的，最后列出结果；失败的处理后再双击一次即可。
 # · 已经装好且版本相同的会自动跳过，重复运行很快。
+# · 先复制到隐藏的临时名字，完整复制好才换上，中途关窗口或断电不会留下装了一半的软件。
 # · 全过程记录在 桌面/一键安装日志.txt。
 # 兼容 macOS 自带的 bash 3.2。
+
+# 被用 sh/zsh 运行时换回 bash（下面用到了 bash 才有的功能）
+if [ -z "${BASH_VERSION:-}" ]; then exec /bin/bash "$0" "$@"; fi
+case ":${SHELLOPTS:-}:" in *:posix:*) exec /bin/bash "$0" "$@" ;; esac
 
 set -u
 cd "$(dirname "$0")" || exit 1
@@ -44,6 +49,62 @@ die() {
   pause_exit 1
 }
 
+# 临时文件都放在这一个目录里，结束（包括中途关窗口）时统一清掉
+WORK=$(mktemp -d /tmp/oneclick.XXXXXX) || die "无法创建临时目录"
+CUR_STAGE=""
+SUDO=""
+LOCK=/tmp/oneclick.lock
+LOCKED=0
+cleanup() {
+  local m
+  for m in "$WORK"/mnt.*; do
+    [ -d "$m" ] && hdiutil detach "$m" -force -quiet >/dev/null 2>&1
+  done
+  [ -n "$CUR_STAGE" ] && $SUDO rm -rf "$CUR_STAGE" 2>/dev/null
+  case "$WORK" in /tmp/oneclick.?*) rm -rf "$WORK" 2>/dev/null ;; esac
+  if [ "$LOCKED" = 1 ]; then rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null; fi
+}
+trap cleanup EXIT
+trap 'exit 130' HUP TERM
+trap 'echo ""; echo "⚠️  安装被中断。再双击一次即可继续，已装好的会自动跳过。"; exit 130' INT
+
+# 同一时间只允许运行一个（不小心双击了两次时，第二个直接退出）
+if ! mkdir "$LOCK" 2>/dev/null; then
+  other=$(cat "$LOCK/pid" 2>/dev/null)
+  if [ -n "$other" ] && ps -p "$other" -o command= 2>/dev/null | grep -q '一键安装'; then
+    die "一键安装已经在另一个终端窗口里运行了，等那边结束就行，不要同时运行两个。"
+  fi
+  # 上次异常退出留下的锁，清掉重来
+  rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null
+  mkdir "$LOCK" 2>/dev/null || die "无法创建 $LOCK，请重启电脑后再运行。"
+fi
+LOCKED=1
+echo $$ > "$LOCK/pid"
+
+# 申请管理员权限（只问一次密码）；已有免密 sudo 时不问
+get_admin() {
+  [ -n "$SUDO" ] && return 0
+  if ! sudo -n true 2>/dev/null; then
+    echo ""
+    echo "需要输入一次这台 Mac 的开机密码（输入时屏幕上不显示，输完按回车）："
+    sudo -v </dev/tty || return 1
+  fi
+  SUDO="sudo"
+  # sudo 默认 5 分钟后忘记密码，安装比这久，后台续期免得中途再问
+  ( while kill -0 $$ 2>/dev/null; do sudo -n true; sleep 50; done ) >/dev/null 2>&1 &
+  return 0
+}
+
+# 系统版本是否 ≥ 要求（比较“主版本.次版本”，例如 13.6）
+os_at_least() {
+  local a1 a2 b1 b2 rest
+  IFS=. read -r a1 a2 rest <<< "$os_version"
+  IFS=. read -r b1 b2 rest <<< "$1"
+  a1=${a1//[!0-9]/}; a2=${a2//[!0-9]/}; b1=${b1//[!0-9]/}; b2=${b2//[!0-9]/}
+  a1=${a1:-0}; a2=${a2:-0}; b1=${b1:-0}; b2=${b2:-0}
+  [ "$a1" -gt "$b1" ] || { [ "$a1" -eq "$b1" ] && [ "$a2" -ge "$b2" ]; }
+}
+
 echo "=================================================="
 echo "        一键安装（Intel Mac 专用）"
 echo "=================================================="
@@ -53,8 +114,7 @@ echo ""
 arch=$(uname -m)
 [ "$arch" = "x86_64" ] || die "这台 Mac 不是 Intel 芯片（检测到 ${arch}），这些安装包是给 Intel Mac 准备的。"
 os_version=$(sw_vers -productVersion)
-os_major=${os_version%%.*}
-[ "$os_major" -ge 11 ] || die "系统版本是 macOS ${os_version}，太旧了。请先到“系统设置 → 软件更新”升级（建议 macOS 14 或更新）。"
+os_at_least 11 || die "系统版本是 macOS ${os_version}，太旧了。请先到“系统设置 → 软件更新”升级（建议 macOS 14 或更新）。"
 echo "✅ Intel 芯片，macOS $os_version"
 [ -d "$PKG" ] || die "没找到“安装包”文件夹，请把整个“拷到Mac”文件夹完整拷过来。"
 
@@ -65,15 +125,11 @@ if [ -n "$free_gb" ] && [ "$free_gb" -lt 10 ]; then
 fi
 echo "✅ 磁盘剩余 ${free_gb}GB"
 
-# 管理员权限：普通账户写不进“应用程序”，这时请求一次开机密码
-SUDO=""
+# 普通账户写不进“应用程序”，这时请求一次开机密码
 if [ ! -w /Applications ]; then
   echo ""
-  echo "当前账户不能直接写入“应用程序”，需要输入一次这台 Mac 的开机密码（输入时不显示，输完回车）："
-  sudo -v </dev/tty || die "密码不对或当前账户不是管理员，无法安装。"
-  SUDO="sudo"
-  # sudo 默认 5 分钟后忘记密码，安装比这久，后台续期免得中途再问
-  ( while kill -0 $$ 2>/dev/null; do sudo -n true 2>/dev/null; sleep 50; done ) &
+  echo "当前账户不能直接写入“应用程序”。"
+  get_admin || die "密码不对或当前账户不是管理员，无法安装。"
 fi
 
 START=$SECONDS
@@ -86,7 +142,7 @@ if [ -f "$HERE/SHA256SUMS.txt" ]; then
   echo ""
   echo "▶ 校验安装包是否完整…"
   t=$SECONDS
-  shadir=$(mktemp -d /tmp/oneclick-sha.XXXXXX)
+  shadir=$(mktemp -d "$WORK/sha.XXXXXX")
   sha_pids=""
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line%$'\r'}
@@ -127,63 +183,90 @@ app_version() {
   b=$(plist_value "$1" CFBundleVersion)
   if [ -n "$b" ] && [ "$b" != "$v" ]; then echo "$v ($b)"; else echo "$v"; fi
 }
-# 系统版本是否 ≥ 要求（比较“主版本.次版本”，例如 13.6）
-os_at_least() {
-  local a1 a2 b1 b2 rest
-  IFS=. read -r a1 a2 rest <<< "$os_version"
-  IFS=. read -r b1 b2 rest <<< "$1"
-  a2=${a2:-0}; b2=${b2:-0}
-  [ "$a1" -gt "$b1" ] || { [ "$a1" -eq "$b1" ] && [ "$a2" -ge "$b2" ]; }
+
+# 把旧版移到废纸篓；不是自己装的（例如 App Store 装的，属于系统管理员）就用管理员权限再试
+retire_app() {
+  local name stamp dest
+  name=$(basename "$1" .app)
+  stamp=$(date +%Y%m%d-%H%M%S)
+  dest="$HOME/.Trash/${name} 旧版 ${stamp}.app"
+  mkdir -p "$HOME/.Trash" 2>/dev/null
+  $SUDO mv "$1" "$dest" 2>/dev/null && return 0
+  if [ -z "$SUDO" ] && get_admin; then
+    $SUDO mv "$1" "$dest" 2>/dev/null && return 0
+  fi
+  # 废纸篓不让写时放进临时目录（重启后系统自动清理）
+  $SUDO mv "$1" "/private/tmp/${name} 旧版 ${stamp}.app" 2>/dev/null
 }
 
-# 把一个 .app 装进“应用程序”：版本相同就跳过；否则关掉旧的 → 旧版移到废纸篓 → 复制 → 去隔离
+# 把一个 .app 装进“应用程序”：版本相同就跳过；否则先复制到隐藏临时名字 → 关掉旧的 → 旧版移到废纸篓 → 换上新版
 # 第三个参数为 move 时直接移动（来源是自己解压的临时目录，同一块盘上移动是瞬间完成的）
 place_app() {
-  local label="$1" src="$2" mode="${3:-copy}" name target new_v old_v
+  local label="$1" src="$2" mode="${3:-copy}" name target stage new_v old_v min exe
   name=$(basename "$src")
   target="/Applications/$name"
   new_v=$(app_version "$src")
+  min=$(plist_value "$src" LSMinimumSystemVersion)
+  if [ -n "$min" ] && ! os_at_least "$min"; then
+    skip "${label}：需要 macOS $min 或更新（当前 ${os_version}），升级系统后再运行一次"
+    return 0
+  fi
   if [ -d "$target" ]; then
     old_v=$(app_version "$target")
-    if [ "$old_v" = "$new_v" ]; then
+    exe=$(plist_value "$target" CFBundleExecutable)
+    # 版本相同、程序文件也在，才算装好了
+    if [ "$old_v" = "$new_v" ] && [ -n "$exe" ] && [ -x "$target/Contents/MacOS/$exe" ]; then
       skip "$label 已是这个版本 ${new_v}，跳过"
       return 0
     fi
+  fi
+  stage="/Applications/.${name}.oneclick-$$"
+  CUR_STAGE="$stage"
+  if [ "$mode" = "move" ] && $SUDO mv "$src" "$stage" 2>/dev/null; then
+    :
+  elif ! $SUDO ditto "$src" "$stage"; then
+    $SUDO rm -rf "$stage" 2>/dev/null; CUR_STAGE=""
+    bad "${label}：复制到“应用程序”失败（磁盘空间不够？）"
+    return 1
+  fi
+  $SUDO xattr -dr com.apple.quarantine "$stage" 2>/dev/null
+  if [ -d "$target" ]; then
     # 只在它正在运行时才去关，避免弹出“找不到应用”的对话框
     if pgrep -f "$target/Contents/MacOS/" >/dev/null 2>&1; then
+      echo "   正在关闭正在运行的旧版…"
       osascript -e "tell application \"$target\" to quit" >/dev/null 2>&1
       sleep 3
       pkill -f "$target/Contents/MacOS/" >/dev/null 2>&1
       sleep 1
     fi
-    if ! $SUDO mv "$target" "$HOME/.Trash/${name%.app} 旧版 $(date +%Y%m%d-%H%M%S).app" 2>/dev/null; then
-      bad "${label}：旧版本移不走，请手动把“应用程序”里的 $name 拖到废纸篓后再运行"
+    if ! retire_app "$target"; then
+      $SUDO rm -rf "$stage" 2>/dev/null; CUR_STAGE=""
+      bad "${label}：旧版本移不走。请在“系统设置 → 隐私与安全性 → App 管理”里打开“终端”，或手动把“应用程序”里的 ${name} 拖到废纸篓，再运行一次"
       return 1
     fi
   fi
-  if [ "$mode" = "move" ] && $SUDO mv "$src" "$target" 2>/dev/null; then
-    :
-  elif ! $SUDO ditto "$src" "$target"; then
-    bad "${label}：复制到“应用程序”失败"
+  if ! $SUDO mv "$stage" "$target" 2>/dev/null; then
+    $SUDO rm -rf "$stage" 2>/dev/null; CUR_STAGE=""
+    bad "${label}：放进“应用程序”失败"
     return 1
   fi
-  $SUDO xattr -dr com.apple.quarantine "$target" 2>/dev/null
+  CUR_STAGE=""
   ok "$label $new_v → /Applications/$name"
 }
 
 # 从 dmg 安装：挂载 → 复制里面的 .app → 卸载
 install_dmg() {
-  local label="$1" file="$2" min_major="$3" mnt app found=0 t=$SECONDS verify="-verify"
+  local label="$1" file="$2" min_os="$3" mnt app found=0 t=$SECONDS verify="-verify"
   echo ""
   echo "▶ $label"
-  if ! os_at_least "$min_major"; then
-    skip "${label}：需要 macOS $min_major 或更新（当前 ${os_version}），升级系统后再运行一次"
+  if ! os_at_least "$min_os"; then
+    skip "${label}：需要 macOS $min_os 或更新（当前 ${os_version}），升级系统后再运行一次"
     return
   fi
   if ! file_ok "$file"; then bad "${label}：安装包缺失或损坏（${file}）"; return; fi
   # 这个文件已经用 SHA256 校验过，就不让 hdiutil 再把整个 dmg 读一遍做校验
   case "$good_files" in *"|$file|"*) verify="-noverify" ;; esac
-  mnt=$(mktemp -d /tmp/oneclick.XXXXXX)
+  mnt=$(mktemp -d "$WORK/mnt.XXXXXX")
   # yes 用来自动同意少数 dmg 自带的许可协议
   if ! yes 2>/dev/null | hdiutil attach "$verify" -nobrowse -readonly -noautoopen -noautofsck -mountpoint "$mnt" "$PKG/$file" >/dev/null 2>&1; then
     rmdir "$mnt" 2>/dev/null
@@ -201,18 +284,19 @@ install_dmg() {
   echo "   $(elapsed $t)"
 }
 
-# 从 zip 安装：解压到临时目录 → 复制 .app（临时目录在 /tmp，重启自动清理）
+# 从 zip 安装：解压到临时目录 → 移动 .app → 删掉临时目录
 install_zip() {
-  local label="$1" file="$2" min_major="$3" tmp app found=0 t=$SECONDS
+  local label="$1" file="$2" min_os="$3" tmp app found=0 t=$SECONDS
   echo ""
   echo "▶ $label"
-  if ! os_at_least "$min_major"; then
-    skip "${label}：需要 macOS $min_major 或更新（当前 ${os_version}）"
+  if ! os_at_least "$min_os"; then
+    skip "${label}：需要 macOS $min_os 或更新（当前 ${os_version}），升级系统后再运行一次"
     return
   fi
   if ! file_ok "$file"; then bad "${label}：安装包缺失或损坏（${file}）"; return; fi
-  tmp=$(mktemp -d /tmp/oneclick.XXXXXX)
+  tmp=$(mktemp -d "$WORK/zip.XXXXXX")
   if ! ditto -x -k "$PKG/$file" "$tmp"; then
+    rm -rf "$tmp"
     bad "${label}：解压失败"
     return
   fi
@@ -222,6 +306,7 @@ install_zip() {
     place_app "$label" "$app" move
   done
   [ "$found" = 1 ] || bad "${label}：压缩包里没找到应用程序"
+  rm -rf "$tmp"
   echo "   $(elapsed $t)"
 }
 
@@ -232,12 +317,12 @@ install_kimi() {
   local label="Kimi Code（命令行）" dir="$HOME/.kimi-code" tmp bin rc line
   echo ""
   echo "▶ $label"
-  if ! file_ok "$KIMI_FILE"; then bad "${label}：安装包缺失或损坏（${KIMI_FILE}）"; return; fi
   if [ -f "$dir/bin/kimi" ] && [ "$(shasum -a 256 "$dir/bin/kimi" | awk '{print $1}')" = "$KIMI_SHA" ]; then
     skip "$label 已是 2.3.3，跳过"
     return
   fi
-  tmp=$(mktemp -d /tmp/oneclick.XXXXXX)
+  if ! file_ok "$KIMI_FILE"; then bad "${label}：安装包缺失或损坏（${KIMI_FILE}）"; return; fi
+  tmp=$(mktemp -d "$WORK/kimi.XXXXXX")
   tar -xzf "$PKG/$KIMI_FILE" -C "$tmp" 2>/dev/null || { bad "${label}：解压失败"; return; }
   # 在解压出的文件里找校验值对得上的那个程序
   bin=""
@@ -264,7 +349,7 @@ install_kimi() {
 }
 
 # ---------- 3. 逐个安装 ----------
-# 参数：名称  安装包文件名  最低 macOS 主版本
+# 参数：名称  安装包文件名  最低 macOS 版本（装的时候还会再按软件自己声明的最低版本检查一次）
 dsh_dmg=$(cd "$PKG" && ls -1 deepseek-harness-*.dmg 2>/dev/null | head -n 1)
 if [ -n "$dsh_dmg" ]; then
   install_dmg "DeepSeek Harness" "$dsh_dmg" 13
