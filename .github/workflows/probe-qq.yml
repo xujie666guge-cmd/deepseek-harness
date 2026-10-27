@@ -1,0 +1,19 @@
+name: Probe QQ Mac download
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe official QQ Mac dmg
+        run: |
+          u="https://qqdl.gtimg.cn/qqfile/QQNTV2/9.9.36/release/837fcb63/QQ_7.0.2_260924_01.dmg"
+          curl -sI --max-time 20 -o /dev/null -w "plain HEAD: %{http_code} len=%header{content-length}\n" "$u" || true
+          curl -s -r 0-0 -e "https://im.qq.com/" -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" --max-time 20 -o /dev/null -w "range+referer: %{http_code} range=%header{content-range}\n" "$u" || true
+          curl -fsSL --max-time 300 -o qq.dmg "$u" && ls -l qq.dmg && sha256sum qq.dmg || echo "full download failed"
