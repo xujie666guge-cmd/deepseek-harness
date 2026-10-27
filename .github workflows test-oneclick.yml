@@ -1,0 +1,124 @@
+name: Test one-click installer · macOS Intel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  test:
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: oneclick
+      - name: Host
+        run: |
+          uname -m
+          sw_vers
+          df -h /
+          test "$(uname -m)" = x86_64
+      - name: Assemble kit exactly as on the USB stick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          kit="$RUNNER_TEMP/拷到Mac"
+          mkdir -p "$kit/安装包"
+          cp oneclick/一键安装.command "$kit/"
+          [ -f oneclick/SHA256SUMS.txt ] && cp oneclick/SHA256SUMS.txt "$kit/"
+          chmod +x "$kit/一键安装.command"
+          cd "$kit/安装包"
+          gh run download 40445734878 -R "$GITHUB_REPOSITORY" -n dsh-desktop-mac-x64-40445734878 -D .
+          rm -f SHA256SUMS.txt
+          get() { curl -fsSL --retry 5 -o "$1" "$2"; echo "$1 $(stat -f %z "$1")"; }
+          get Antigravity-2.26.0-Intel.dmg      "https://storage.googleapis.com/antigravity-public/antigravity-hub/2.26.0-6546645232517120/darwin-x64/Antigravity.dmg"
+          get Antigravity-IDE-2.5.5-Intel.dmg   "https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/2.5.5-4923483625488384/darwin-x64/Antigravity%20IDE.dmg"
+          get ChatGPT-Codex-Intel.dmg           "https://persistent.oaistatic.com/codex-app-prod/ChatGPT-latest-x64.dmg"
+          get Grok-Bot-0.77.0-Intel.dmg         "https://downloads.cursor.com/grokbot/stable/darwin-x64/0.77.0/Grok_Bot_0.77.0_x64.dmg"
+          get Claude-3.6556.2-Universal.zip     "https://downloads.claude.ai/releases/darwin/universal/3.6556.2/Claude-20c019a1e61fa5b687616af57d31f97bb3181723.zip"
+          get kimi-code-2.3.3-darwin-x64.tar.gz "https://code.kimi.com/kimi-code/binaries/2.3.3/kimi-code-darwin-x64.tar.gz"
+          if [ ! -f "$kit/SHA256SUMS.txt" ]; then
+            (cd "$kit/安装包" && shasum -a 256 * > "$kit/SHA256SUMS.txt")
+          fi
+          echo "--- SHA256SUMS.txt"
+          cat "$kit/SHA256SUMS.txt"
+          echo "kit=$kit" >> "$GITHUB_ENV"
+      - name: First run of 一键安装.command
+        run: |
+          set +e
+          bash "$kit/一键安装.command" < /dev/null
+          echo "exit=$?"
+      - name: Verify installed apps are Intel-capable
+        run: |
+          set +e +o pipefail
+          for app in "/Applications/DeepSeek Harness.app" /Applications/Antigravity*.app /Applications/ChatGPT*.app /Applications/Grok*.app /Applications/Claude.app; do
+            [ -d "$app" ] || { echo "MISSING $app"; continue; }
+            exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+            v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
+            min=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist" 2>/dev/null)
+            archs=$(lipo -archs "$app/Contents/MacOS/$exe")
+            q=$(xattr -p com.apple.quarantine "$app" 2>/dev/null || echo none)
+            sig=$(codesign -dv "$app" 2>&1 | grep -E '^(Authority|Signature)=' | head -n 1)
+            echo "$(basename "$app") | v$v | archs: $archs | min macOS: ${min:-?} | quarantine: $q | ${sig:-unsigned/adhoc}"
+          done
+          ls -l ~/.kimi-code/bin/
+          ~/.kimi-code/bin/kimi --version
+          file ~/.kimi-code/bin/kimi
+          tail -n 3 ~/.zshrc
+      - name: Launch smoke test (each app starts and stays up 20s)
+        if: always()
+        run: |
+          set +e +o pipefail
+          for app in "/Applications/DeepSeek Harness.app" /Applications/Antigravity*.app /Applications/ChatGPT*.app /Applications/Grok*.app /Applications/Claude.app; do
+            [ -d "$app" ] || continue
+            exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+            open "$app"; sleep 20
+            if pgrep -f "$app/Contents/MacOS/$exe" >/dev/null; then echo "RUNNING  $(basename "$app")"; else echo "NOT RUNNING  $(basename "$app")"; fi
+            pkill -f "$app/Contents/" || true; sleep 2
+          done
+      - name: Second run (should skip everything)
+        if: always()
+        env:
+          LANG: zh_CN.UTF-8
+          LC_ALL: zh_CN.UTF-8
+        run: |
+          set +e
+          bash "$kit/一键安装.command" < /dev/null
+          echo "exit=$?"
+      - name: Third run (older DSH installed → upgrade; damaged Grok dmg → only Grok fails)
+        if: always()
+        env:
+          LANG: zh_CN.UTF-8
+          LC_ALL: zh_CN.UTF-8
+        run: |
+          set +e
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 0.1.0' "/Applications/DeepSeek Harness.app/Contents/Info.plist"
+          printf 'x' >> "$kit/安装包/Grok-Bot-0.77.0-Intel.dmg"
+          bash "$kit/一键安装.command" < /dev/null
+          echo "exit=$?"
+          echo "--- Trash:"; ls ~/.Trash
+          echo "--- DSH version now: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "/Applications/DeepSeek Harness.app/Contents/Info.plist")"
+          echo "--- Grok still installed: $(ls -d /Applications/Grok*.app)"
+      - name: Fourth run with DSH dmg missing
+        if: always()
+        run: |
+          set +e
+          mv "$kit/安装包/deepseek-harness-0.2.1-rc.3-mac-x64-unsigned.dmg" "$RUNNER_TEMP/"
+          bash "$kit/一键安装.command" < /dev/null
+          echo "exit=$?"
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: oneclick-log-${{ github.run_id }}
+          path: |
+            ~/Desktop/一键安装日志.txt
+            ~/一键安装日志.txt
+          if-no-files-found: warn
