@@ -1,6 +1,6 @@
 #!/bin/bash
 # 一键安装（Intel Mac）：DeepSeek Harness、Kimi Code、Antigravity、Antigravity IDE、
-# ChatGPT（含 Codex）、Grok Bot、Claude
+# ChatGPT（含 Codex）、Grok Bot、Claude、微信、QQ、v2rayN（节点软件）
 #
 # 双击运行：检查电脑 → 校验安装包 → 逐个装进“应用程序” → 解除隔离 → 打开“应用程序”
 # · 某一个装失败不影响其他的，最后列出结果；失败的处理后再双击一次即可。
@@ -81,7 +81,7 @@ elapsed() { echo "（用时 $(( SECONDS - $1 )) 秒）"; }
 
 # ---------- 2. 校验所有安装包（全部并行计算，用满所有 CPU 核心）----------
 bad_files=""
-verified=0
+good_files=""
 if [ -f "$HERE/SHA256SUMS.txt" ]; then
   echo ""
   echo "▶ 校验安装包是否完整…"
@@ -106,13 +106,13 @@ if [ -f "$HERE/SHA256SUMS.txt" ]; then
       bad_files="${bad_files}|${file}|"
       echo "   ⚠️  缺少：$file"
     elif [ "$(cat "$shadir/$file" 2>/dev/null)" = "$expected" ]; then
+      good_files="${good_files}|${file}|"
       echo "   ✔ $file"
     else
       bad_files="${bad_files}|${file}|"
       echo "   ⚠️  损坏：${file}（对应软件会跳过，从 U 盘重新拷一次这个文件即可）"
     fi
   done < "$HERE/SHA256SUMS.txt"
-  verified=1
   echo "   $(elapsed $t)"
 else
   echo "⚠️  没找到 SHA256SUMS.txt，跳过完整性校验"
@@ -167,8 +167,8 @@ install_dmg() {
     return
   fi
   if ! file_ok "$file"; then bad "${label}：安装包缺失或损坏（${file}）"; return; fi
-  # 已经用 SHA256 校验过，就不让 hdiutil 再把整个 dmg 读一遍做校验
-  [ "$verified" = 1 ] && verify="-noverify"
+  # 这个文件已经用 SHA256 校验过，就不让 hdiutil 再把整个 dmg 读一遍做校验
+  case "$good_files" in *"|$file|"*) verify="-noverify" ;; esac
   mnt=$(mktemp -d /tmp/oneclick.XXXXXX)
   # yes 用来自动同意少数 dmg 自带的许可协议
   if ! yes 2>/dev/null | hdiutil attach "$verify" -nobrowse -readonly -noautoopen -noautofsck -mountpoint "$mnt" "$PKG/$file" >/dev/null 2>&1; then
@@ -265,6 +265,23 @@ install_dmg "Antigravity IDE"     "Antigravity-IDE-2.5.5-Intel.dmg"  12
 install_dmg "ChatGPT（含 Codex）" "ChatGPT-Codex-Intel.dmg"          13
 install_dmg "Grok Bot"            "Grok-Bot-0.77.0-Intel.dmg"        12
 install_zip "Claude"              "Claude-3.6556.2-Universal.zip"    13
+install_dmg "v2rayN（节点软件）"  "v2rayN-7.25.6-Intel.dmg"          12
+install_dmg "微信"                "WeChat-Universal.dmg"             11
+# QQ 官方安装包有就装；没有（官网链接失效时）就在最后打开 App Store 的 QQ 页面
+qq_dmg=$(cd "$PKG" && ls -1 QQ-*.dmg 2>/dev/null | head -n 1)
+qq_from_store=0
+if [ -n "$qq_dmg" ]; then
+  install_dmg "QQ" "$qq_dmg" 11
+elif [ -d "/Applications/QQ.app" ]; then
+  echo ""
+  echo "▶ QQ"
+  skip "QQ 已经装好，跳过"
+else
+  echo ""
+  echo "▶ QQ"
+  skip "QQ：官网安装包暂时下载不了，结束后会打开 App Store 的 QQ 页面，点“获取”即可（需要联网）"
+  qq_from_store=1
+fi
 
 # ---------- 4. 结果 ----------
 echo ""
@@ -278,8 +295,10 @@ echo "· 桌面软件都在“应用程序”里，也可以按 Command+空格 �
 echo "· Kimi Code 是命令行工具：新开一个“终端”窗口，输入 kimi 回车。"
 echo "· 各软件第一次打开时登录自己的账号。"
 echo "· DeepSeek Harness：设置 → 模型，填入 DeepSeek API 密钥。"
+echo "· v2rayN：导入你的节点（订阅地址或分享链接）后开启系统代理，海外软件才能登录。"
 echo "· 全过程记录在 桌面/一键安装日志.txt"
 echo "· 总用时 $(( (SECONDS - START) / 60 )) 分 $(( (SECONDS - START) % 60 )) 秒"
 echo "######## $(date '+%Y-%m-%d %H:%M:%S') 结束 ########"
 open /Applications
+[ "$qq_from_store" = 1 ] && open "macappstore://apps.apple.com/cn/app/qq/id451108668" >/dev/null 2>&1
 if [ -n "$fail_list" ]; then pause_exit 1; else pause_exit 0; fi
