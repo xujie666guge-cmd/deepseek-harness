@@ -102,6 +102,7 @@ jobs:
         run: |
           set +e
           /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 0.1.0' "/Applications/DeepSeek Harness.app/Contents/Info.plist"
+          cp "$kit/安装包/Grok-Bot-0.77.0-Intel.dmg" "$RUNNER_TEMP/grok-good.dmg"
           printf 'x' >> "$kit/安装包/Grok-Bot-0.77.0-Intel.dmg"
           bash "$kit/一键安装.command" < /dev/null
           echo "exit=$?"
@@ -115,6 +116,49 @@ jobs:
           mv "$kit/安装包/deepseek-harness-0.2.1-rc.3-mac-x64-unsigned.dmg" "$RUNNER_TEMP/"
           bash "$kit/一键安装.command" < /dev/null
           echo "exit=$?"
+      - name: Fifth run via sh (restored kit; root-owned older Claude like an App Store install → upgraded)
+        if: always()
+        run: |
+          set +e
+          mv "$RUNNER_TEMP/deepseek-harness-0.2.1-rc.3-mac-x64-unsigned.dmg" "$kit/安装包/"
+          cp "$RUNNER_TEMP/grok-good.dmg" "$kit/安装包/Grok-Bot-0.77.0-Intel.dmg"
+          sudo /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 0.1.0' /Applications/Claude.app/Contents/Info.plist
+          sudo chown -R root:wheel /Applications/Claude.app
+          sh "$kit/一键安装.command" < /dev/null
+          echo "exit=$?"
+          echo "--- Claude now: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/Claude.app/Contents/Info.plist)"
+      - name: Sixth run - double launch is refused
+        if: always()
+        run: |
+          set +e
+          bash "$kit/一键安装.command" < /dev/null > "$RUNNER_TEMP/a.txt" 2>&1 &
+          a=$!
+          sleep 3
+          bash "$kit/一键安装.command" < /dev/null
+          echo "second exit=$?"
+          wait $a; echo "first exit=$?"
+          tail -n 5 "$RUNNER_TEMP/a.txt"
+      - name: Seventh run - killed in the middle of copying, then rerun
+        if: always()
+        run: |
+          set +e
+          sudo rm -rf /Applications/ChatGPT.app /Applications/Antigravity*.app /Applications/WeChat.app "/Applications/Grok Bot.app"
+          bash "$kit/一键安装.command" < /dev/null > "$RUNNER_TEMP/b.txt" 2>&1 &
+          b=$!
+          for i in $(seq 1 3000); do ls -d /Applications/.*.oneclick-* >/dev/null 2>&1 && break; sleep 0.1; done
+          echo "staging seen: $(ls -d /Applications/.*.oneclick-* 2>/dev/null)"
+          kill -TERM $b; wait $b; echo "killed run exit=$?"
+          echo "--- leftovers after kill (should be empty):"
+          ls -d /Applications/.*.oneclick-* /tmp/oneclick.* 2>/dev/null
+          hdiutil info | grep -i oneclick
+          echo "--- end leftovers"
+          bash "$kit/一键安装.command" < /dev/null
+          echo "rerun exit=$?"
+          echo "--- final leftovers (should be empty):"
+          ls -d /Applications/.*.oneclick-* /tmp/oneclick.* 2>/dev/null
+          hdiutil info | grep -i oneclick
+          echo "--- end"
+          ls /Applications
       - name: Upload log
         if: always()
         uses: actions/upload-artifact@v7.0.1
