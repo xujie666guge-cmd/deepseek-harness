@@ -36,6 +36,7 @@ jobs:
           chmod +x "$kit/一键安装.command"
           cd "$kit/安装包"
           gh run download 40445734878 -R "$GITHUB_REPOSITORY" -n dsh-desktop-mac-x64-40445734878 -D .
+          rm -f SHA256SUMS.txt
           get() { curl -fsSL --retry 5 -o "$1" "$2"; echo "$1 $(stat -f %z "$1")"; }
           get Antigravity-2.26.0-Intel.dmg      "https://storage.googleapis.com/antigravity-public/antigravity-hub/2.26.0-6546645232517120/darwin-x64/Antigravity.dmg"
           get Antigravity-IDE-2.5.5-Intel.dmg   "https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/2.5.5-4923483625488384/darwin-x64/Antigravity%20IDE.dmg"
@@ -56,6 +57,7 @@ jobs:
           echo "exit=$?"
       - name: Verify installed apps are Intel-capable
         run: |
+          set +e +o pipefail
           for app in "/Applications/DeepSeek Harness.app" /Applications/Antigravity*.app /Applications/ChatGPT*.app /Applications/Grok*.app /Applications/Claude.app; do
             [ -d "$app" ] || { echo "MISSING $app"; continue; }
             exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
@@ -71,7 +73,9 @@ jobs:
           file ~/.kimi-code/bin/kimi
           tail -n 3 ~/.zshrc
       - name: Launch smoke test (each app starts and stays up 20s)
+        if: always()
         run: |
+          set +e +o pipefail
           for app in "/Applications/DeepSeek Harness.app" /Applications/Antigravity*.app /Applications/ChatGPT*.app /Applications/Grok*.app /Applications/Claude.app; do
             [ -d "$app" ] || continue
             exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
@@ -80,6 +84,7 @@ jobs:
             pkill -f "$app/Contents/" || true; sleep 2
           done
       - name: Second run (should skip everything)
+        if: always()
         run: |
           set +e
           bash "$kit/一键安装.command" < /dev/null
