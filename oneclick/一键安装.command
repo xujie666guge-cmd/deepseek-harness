@@ -32,7 +32,8 @@ skip() { skip_list="${skip_list}  ⏭  $1"$'\n'; echo "   ⏭  $1"; }
 
 pause_exit() {
   echo ""
-  read -n 1 -s -r -p "按任意键关闭窗口…" </dev/tty
+  printf '按任意键关闭窗口…'
+  read -n 1 -s -r 2>/dev/null </dev/tty
   echo ""
   exit "$1"
 }
