@@ -1,0 +1,75 @@
+name: Build DSH Desktop · macOS Intel (x64, unsigned)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Upstream deepseek-ai/deepseek-harness ref (dsh-v* tag or branch)'
+        type: string
+        default: dsh-v0.2.1-rc.3
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: macos-15-intel
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      DSH_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+      - name: Confirm Intel host
+        run: |
+          uname -m
+          sw_vers
+          test "$(uname -m)" = x86_64
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+      - name: Toolchain versions
+        run: |
+          node -p 'process.version + " " + process.arch'
+          pnpm --version
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Package unsigned mac-x64 installer
+        run: pnpm run package:desktop:mac:x64:unsigned 2>&1 | tee "$RUNNER_TEMP/package.log"
+      - name: Collect installers
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          find apps/desktop -path '*/node_modules' -prune -o -type f \( -name '*.dmg' -o -name '*mac-x64*.zip' \) -print \
+            | tee "$RUNNER_TEMP/found.txt"
+          test -s "$RUNNER_TEMP/found.txt"
+          while IFS= read -r f; do cp "$f" "$RUNNER_TEMP/out/"; done < "$RUNNER_TEMP/found.txt"
+          cd "$RUNNER_TEMP/out"
+          for f in *.dmg; do hdiutil imageinfo "$f" | grep -E 'Format|Checksum Type' || true; done
+          shasum -a 256 * | tee SHA256SUMS.txt
+      - name: Upload installers
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: dsh-desktop-mac-x64-${{ github.run_id }}
+          path: ${{ runner.temp }}/out/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload packaging diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: packaging-logs-${{ github.run_id }}
+          include-hidden-files: true
+          path: |
+            ${{ runner.temp }}/package.log
+            apps/desktop/.desktop-build/packaging-runs/
+          if-no-files-found: warn
+          retention-days: 14
