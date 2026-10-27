@@ -44,6 +44,8 @@ jobs:
           get Grok-Bot-0.77.0-Intel.dmg         "https://downloads.cursor.com/grokbot/stable/darwin-x64/0.77.0/Grok_Bot_0.77.0_x64.dmg"
           get Claude-3.6556.2-Universal.zip     "https://downloads.claude.ai/releases/darwin/universal/3.6556.2/Claude-20c019a1e61fa5b687616af57d31f97bb3181723.zip"
           get kimi-code-2.3.3-darwin-x64.tar.gz "https://code.kimi.com/kimi-code/binaries/2.3.3/kimi-code-darwin-x64.tar.gz"
+          get WeChat-Universal.dmg              "https://dldir1.qq.com/weixin/Universal/Mac/WeChatMac.dmg"
+          get v2rayN-7.25.6-Intel.dmg           "https://github.com/2dust/v2rayN/releases/download/7.25.6/v2rayN-macos-64.dmg"
           if [ ! -f "$kit/SHA256SUMS.txt" ]; then
             (cd "$kit/安装包" && shasum -a 256 * > "$kit/SHA256SUMS.txt")
           fi
@@ -58,7 +60,7 @@ jobs:
       - name: Verify installed apps are Intel-capable
         run: |
           set +e +o pipefail
-          for app in "/Applications/DeepSeek Harness.app" /Applications/Antigravity*.app /Applications/ChatGPT*.app /Applications/Grok*.app /Applications/Claude.app; do
+          for app in "/Applications/DeepSeek Harness.app" /Applications/Antigravity*.app /Applications/ChatGPT*.app /Applications/Grok*.app /Applications/Claude.app /Applications/WeChat*.app /Applications/微信*.app /Applications/v2rayN*.app; do
             [ -d "$app" ] || { echo "MISSING $app"; continue; }
             exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
             v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
@@ -76,7 +78,7 @@ jobs:
         if: always()
         run: |
           set +e +o pipefail
-          for app in "/Applications/DeepSeek Harness.app" /Applications/Antigravity*.app /Applications/ChatGPT*.app /Applications/Grok*.app /Applications/Claude.app; do
+          for app in "/Applications/DeepSeek Harness.app" /Applications/Antigravity*.app /Applications/ChatGPT*.app /Applications/Grok*.app /Applications/Claude.app /Applications/WeChat*.app /Applications/微信*.app /Applications/v2rayN*.app; do
             [ -d "$app" ] || continue
             exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
             open "$app"; sleep 20
