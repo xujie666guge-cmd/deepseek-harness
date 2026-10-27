@@ -72,13 +72,31 @@ if [ ! -w /Applications ]; then
   echo "当前账户不能直接写入“应用程序”，需要输入一次这台 Mac 的开机密码（输入时不显示，输完回车）："
   sudo -v </dev/tty || die "密码不对或当前账户不是管理员，无法安装。"
   SUDO="sudo"
+  # sudo 默认 5 分钟后忘记密码，安装比这久，后台续期免得中途再问
+  ( while kill -0 $$ 2>/dev/null; do sudo -n true 2>/dev/null; sleep 50; done ) &
 fi
 
-# ---------- 2. 校验所有安装包 ----------
+START=$SECONDS
+elapsed() { echo "（用时 $(( SECONDS - $1 )) 秒）"; }
+
+# ---------- 2. 校验所有安装包（全部并行计算，用满所有 CPU 核心）----------
 bad_files=""
+verified=0
 if [ -f "$HERE/SHA256SUMS.txt" ]; then
   echo ""
-  echo "▶ 校验安装包是否完整（约 1～3 分钟）…"
+  echo "▶ 校验安装包是否完整…"
+  t=$SECONDS
+  shadir=$(mktemp -d /tmp/oneclick-sha.XXXXXX)
+  sha_pids=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    file=${line#*  }
+    [ "$file" != "$line" ] && [ -f "$PKG/$file" ] || continue
+    ( shasum -a 256 "$PKG/$file" | awk '{print $1}' > "$shadir/$file" ) &
+    sha_pids="$sha_pids $!"
+  done < "$HERE/SHA256SUMS.txt"
+  # 只等校验任务；不能用不带参数的 wait，否则会一直等后台的防睡眠进程
+  [ -n "$sha_pids" ] && wait $sha_pids
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line%$'\r'}
     expected=${line%% *}
@@ -87,16 +105,15 @@ if [ -f "$HERE/SHA256SUMS.txt" ]; then
     if [ ! -f "$PKG/$file" ]; then
       bad_files="${bad_files}|${file}|"
       echo "   ⚠️  缺少：$file"
-      continue
-    fi
-    actual=$(shasum -a 256 "$PKG/$file" | awk '{print $1}')
-    if [ "$actual" = "$expected" ]; then
+    elif [ "$(cat "$shadir/$file" 2>/dev/null)" = "$expected" ]; then
       echo "   ✔ $file"
     else
       bad_files="${bad_files}|${file}|"
       echo "   ⚠️  损坏：${file}（对应软件会跳过，从 U 盘重新拷一次这个文件即可）"
     fi
   done < "$HERE/SHA256SUMS.txt"
+  verified=1
+  echo "   $(elapsed $t)"
 else
   echo "⚠️  没找到 SHA256SUMS.txt，跳过完整性校验"
 fi
@@ -106,8 +123,9 @@ file_ok() { case "$bad_files" in *"|$1|"*) return 1 ;; esac; [ -f "$PKG/$1" ]; }
 plist_value() { /usr/libexec/PlistBuddy -c "Print :$2" "$1/Contents/Info.plist" 2>/dev/null; }
 
 # 把一个 .app 装进“应用程序”：版本相同就跳过；否则关掉旧的 → 旧版移到废纸篓 → 复制 → 去隔离
+# 第三个参数为 move 时直接移动（来源是自己解压的临时目录，同一块盘上移动是瞬间完成的）
 place_app() {
-  local label="$1" src="$2" name target new_v old_v
+  local label="$1" src="$2" mode="${3:-copy}" name target new_v old_v
   name=$(basename "$src")
   target="/Applications/$name"
   new_v="$(plist_value "$src" CFBundleShortVersionString) ($(plist_value "$src" CFBundleVersion))"
@@ -129,7 +147,9 @@ place_app() {
       return 1
     fi
   fi
-  if ! $SUDO ditto "$src" "$target"; then
+  if [ "$mode" = "move" ] && $SUDO mv "$src" "$target" 2>/dev/null; then
+    :
+  elif ! $SUDO ditto "$src" "$target"; then
     bad "${label}：复制到“应用程序”失败"
     return 1
   fi
@@ -139,7 +159,7 @@ place_app() {
 
 # 从 dmg 安装：挂载 → 复制里面的 .app → 卸载
 install_dmg() {
-  local label="$1" file="$2" min_major="$3" mnt app found=0
+  local label="$1" file="$2" min_major="$3" mnt app found=0 t=$SECONDS verify="-verify"
   echo ""
   echo "▶ $label"
   if [ "$os_major" -lt "$min_major" ]; then
@@ -147,9 +167,11 @@ install_dmg() {
     return
   fi
   if ! file_ok "$file"; then bad "${label}：安装包缺失或损坏（${file}）"; return; fi
+  # 已经用 SHA256 校验过，就不让 hdiutil 再把整个 dmg 读一遍做校验
+  [ "$verified" = 1 ] && verify="-noverify"
   mnt=$(mktemp -d /tmp/oneclick.XXXXXX)
   # yes 用来自动同意少数 dmg 自带的许可协议
-  if ! yes 2>/dev/null | hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$PKG/$file" >/dev/null 2>&1; then
+  if ! yes 2>/dev/null | hdiutil attach "$verify" -nobrowse -readonly -noautoopen -noautofsck -mountpoint "$mnt" "$PKG/$file" >/dev/null 2>&1; then
     rmdir "$mnt" 2>/dev/null
     bad "${label}：打不开安装包"
     return
@@ -162,11 +184,12 @@ install_dmg() {
   [ "$found" = 1 ] || bad "${label}：安装包里没找到应用程序"
   hdiutil detach "$mnt" -quiet >/dev/null 2>&1 || hdiutil detach "$mnt" -force -quiet >/dev/null 2>&1
   rmdir "$mnt" 2>/dev/null
+  echo "   $(elapsed $t)"
 }
 
 # 从 zip 安装：解压到临时目录 → 复制 .app（临时目录在 /tmp，重启自动清理）
 install_zip() {
-  local label="$1" file="$2" min_major="$3" tmp app found=0
+  local label="$1" file="$2" min_major="$3" tmp app found=0 t=$SECONDS
   echo ""
   echo "▶ $label"
   if [ "$os_major" -lt "$min_major" ]; then
@@ -182,9 +205,10 @@ install_zip() {
   for app in "$tmp"/*.app; do
     [ -d "$app" ] || continue
     found=1
-    place_app "$label" "$app"
+    place_app "$label" "$app" move
   done
   [ "$found" = 1 ] || bad "${label}：压缩包里没找到应用程序"
+  echo "   $(elapsed $t)"
 }
 
 # Kimi Code 命令行：按官方安装脚本的做法放到 ~/.kimi-code/bin/kimi 并加进 PATH
@@ -255,6 +279,7 @@ echo "· Kimi Code 是命令行工具：新开一个“终端”窗口，输入 
 echo "· 各软件第一次打开时登录自己的账号。"
 echo "· DeepSeek Harness：设置 → 模型，填入 DeepSeek API 密钥。"
 echo "· 全过程记录在 桌面/一键安装日志.txt"
+echo "· 总用时 $(( (SECONDS - START) / 60 )) 分 $(( (SECONDS - START) % 60 )) 秒"
 echo "######## $(date '+%Y-%m-%d %H:%M:%S') 结束 ########"
 open /Applications
 if [ -n "$fail_list" ]; then pause_exit 1; else pause_exit 0; fi
