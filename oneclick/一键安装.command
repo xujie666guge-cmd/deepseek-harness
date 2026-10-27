@@ -121,6 +121,20 @@ file_ok() { case "$bad_files" in *"|$1|"*) return 1 ;; esac; [ -f "$PKG/$1" ]; }
 
 # ---------- 公共函数 ----------
 plist_value() { /usr/libexec/PlistBuddy -c "Print :$2" "$1/Contents/Info.plist" 2>/dev/null; }
+app_version() {
+  local v b
+  v=$(plist_value "$1" CFBundleShortVersionString)
+  b=$(plist_value "$1" CFBundleVersion)
+  if [ -n "$b" ] && [ "$b" != "$v" ]; then echo "$v ($b)"; else echo "$v"; fi
+}
+# 系统版本是否 ≥ 要求（比较“主版本.次版本”，例如 13.6）
+os_at_least() {
+  local a1 a2 b1 b2 rest
+  IFS=. read -r a1 a2 rest <<< "$os_version"
+  IFS=. read -r b1 b2 rest <<< "$1"
+  a2=${a2:-0}; b2=${b2:-0}
+  [ "$a1" -gt "$b1" ] || { [ "$a1" -eq "$b1" ] && [ "$a2" -ge "$b2" ]; }
+}
 
 # 把一个 .app 装进“应用程序”：版本相同就跳过；否则关掉旧的 → 旧版移到废纸篓 → 复制 → 去隔离
 # 第三个参数为 move 时直接移动（来源是自己解压的临时目录，同一块盘上移动是瞬间完成的）
@@ -128,9 +142,9 @@ place_app() {
   local label="$1" src="$2" mode="${3:-copy}" name target new_v old_v
   name=$(basename "$src")
   target="/Applications/$name"
-  new_v="$(plist_value "$src" CFBundleShortVersionString) ($(plist_value "$src" CFBundleVersion))"
+  new_v=$(app_version "$src")
   if [ -d "$target" ]; then
-    old_v="$(plist_value "$target" CFBundleShortVersionString) ($(plist_value "$target" CFBundleVersion))"
+    old_v=$(app_version "$target")
     if [ "$old_v" = "$new_v" ]; then
       skip "$label 已是这个版本 ${new_v}，跳过"
       return 0
@@ -162,7 +176,7 @@ install_dmg() {
   local label="$1" file="$2" min_major="$3" mnt app found=0 t=$SECONDS verify="-verify"
   echo ""
   echo "▶ $label"
-  if [ "$os_major" -lt "$min_major" ]; then
+  if ! os_at_least "$min_major"; then
     skip "${label}：需要 macOS $min_major 或更新（当前 ${os_version}），升级系统后再运行一次"
     return
   fi
@@ -192,7 +206,7 @@ install_zip() {
   local label="$1" file="$2" min_major="$3" tmp app found=0 t=$SECONDS
   echo ""
   echo "▶ $label"
-  if [ "$os_major" -lt "$min_major" ]; then
+  if ! os_at_least "$min_major"; then
     skip "${label}：需要 macOS $min_major 或更新（当前 ${os_version}）"
     return
   fi
@@ -265,8 +279,8 @@ install_dmg "Antigravity IDE"     "Antigravity-IDE-2.5.5-Intel.dmg"  12
 install_dmg "ChatGPT（含 Codex）" "ChatGPT-Codex-Intel.dmg"          13
 install_dmg "Grok Bot"            "Grok-Bot-0.77.0-Intel.dmg"        12
 install_zip "Claude"              "Claude-3.6556.2-Universal.zip"    13
-install_dmg "v2rayN（节点软件）"  "v2rayN-7.25.6-Intel.dmg"          12
-install_dmg "微信"                "WeChat-Universal.dmg"             11
+install_dmg "v2rayN（节点软件）"  "v2rayN-7.25.6-Intel.dmg"          13.6
+install_dmg "微信"                "WeChat-Universal.dmg"             12
 # QQ 官方安装包有就装；没有（官网链接失效时）就在最后打开 App Store 的 QQ 页面
 qq_dmg=$(cd "$PKG" && ls -1 QQ-*.dmg 2>/dev/null | head -n 1)
 qq_from_store=0
