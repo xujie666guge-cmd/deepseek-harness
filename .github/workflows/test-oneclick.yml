@@ -124,7 +124,7 @@ jobs:
           set +e
           bash "$kit/一键安装.command" < /dev/null
           echo "exit=$?"
-      - name: Third run (older DSH installed → upgrade; damaged Grok dmg → only Grok fails)
+      - name: Third run (other DSH version installed → kept; broken Antigravity IDE → reinstalled; damaged Grok dmg → only Grok fails)
         if: always()
         env:
           LANG: zh_CN.UTF-8
@@ -134,11 +134,14 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 0.1.0' "/Applications/DeepSeek Harness.app/Contents/Info.plist"
           cp "$kit/安装包/Grok-Bot-0.77.0-Intel.dmg" "$RUNNER_TEMP/grok-good.dmg"
           printf 'x' >> "$kit/安装包/Grok-Bot-0.77.0-Intel.dmg"
+          exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "/Applications/Antigravity IDE.app/Contents/Info.plist")
+          mv "/Applications/Antigravity IDE.app/Contents/MacOS/$exe" "$RUNNER_TEMP/"
           bash "$kit/一键安装.command" < /dev/null
           echo "exit=$?"
           echo "--- Trash:"; ls ~/.Trash
           echo "--- DSH version now: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "/Applications/DeepSeek Harness.app/Contents/Info.plist")"
           echo "--- Grok still installed: $(ls -d /Applications/Grok*.app)"
+          echo "--- Antigravity IDE executable back: $(ls "/Applications/Antigravity IDE.app/Contents/MacOS/")"
       - name: Fourth run with DSH dmg missing
         if: always()
         run: |
@@ -146,7 +149,7 @@ jobs:
           mv "$kit/安装包/deepseek-harness-0.2.1-rc.3-mac-x64-unsigned.dmg" "$RUNNER_TEMP/"
           bash "$kit/一键安装.command" < /dev/null
           echo "exit=$?"
-      - name: Fifth run via sh (restored kit; root-owned older Claude like an App Store install → upgraded)
+      - name: Fifth run via sh (restored kit; root-owned other-version Claude like an App Store install → kept, zip not even extracted)
         if: always()
         run: |
           set +e
