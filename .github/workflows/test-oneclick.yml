@@ -51,6 +51,25 @@ jobs:
           fi
           echo "--- SHA256SUMS.txt"
           cat "$kit/SHA256SUMS.txt"
+          # synthetic AI data with the same layout as the real export (no real data leaves the PC)
+          ai="$kit/AI数据"
+          mkdir -p "$ai/home/.claude/projects/C--Users-xgj-demo/memory" "$ai/home/.claude/skills/demo" \
+                   "$ai/home/.codex/sessions/2026/10/27" "$ai/home/.grok/workspace/数学二覆盖检查" \
+                   "$ai/home/.kimi-code/sessions" "$ai/home/.gemini/antigravity/brain/x" "$ai/home/.dsh/sessions" \
+                   "$ai/Windows原配置（仅供参考）/.claude"
+          echo '{"t":"win"}' > "$ai/home/.claude/projects/C--Users-xgj-demo/a.jsonl"
+          echo "# memory" > "$ai/home/.claude/projects/C--Users-xgj-demo/memory/MEMORY.md"
+          echo "skill" > "$ai/home/.claude/skills/demo/SKILL.md"
+          echo '{}' > "$ai/home/.codex/sessions/2026/10/27/rollout.jsonl"
+          echo "数学" > "$ai/home/.grok/workspace/数学二覆盖检查/笔记.md"
+          echo '{}' > "$ai/home/.kimi-code/sessions/s.json"
+          echo "b" > "$ai/home/.gemini/antigravity/brain/x/plan.md"
+          echo '{}' > "$ai/home/.dsh/sessions/d.json"
+          echo "win rules" > "$ai/Windows原配置（仅供参考）/.claude/CLAUDE.md"
+          echo "20261027-000000" > "$ai/EXPORT_ID"
+          chmod -R 777 "$ai"
+          # a file that already exists on the Mac must not be overwritten
+          mkdir -p ~/.claude/projects/C--Users-xgj-demo && echo "mac-original" > ~/.claude/projects/C--Users-xgj-demo/a.jsonl
           echo "kit=$kit" >> "$GITHUB_ENV"
       - name: First run of 一键安装.command
         run: |
@@ -74,6 +93,17 @@ jobs:
           ~/.kimi-code/bin/kimi --version
           file ~/.kimi-code/bin/kimi
           tail -n 3 ~/.zshrc
+      - name: Verify AI data import
+        if: always()
+        run: |
+          set +e
+          echo "existing file kept: $(cat ~/.claude/projects/C--Users-xgj-demo/a.jsonl)"
+          for f in .claude/projects/C--Users-xgj-demo/memory/MEMORY.md .claude/skills/demo/SKILL.md .codex/sessions/2026/10/27/rollout.jsonl ".grok/workspace/数学二覆盖检查/笔记.md" .kimi-code/sessions/s.json .gemini/antigravity/brain/x/plan.md .dsh/sessions/d.json; do
+            if [ -f ~/"$f" ]; then echo "IMPORTED $f $(stat -f %Sp ~/"$f")"; else echo "NOT IMPORTED $f"; fi
+          done
+          ls -l ~/.kimi-code/bin/kimi
+          ls ~/.oneclick-ai-import-*
+          ls -R ~/Documents/"Windows AI 原配置（仅供参考）"
       - name: Launch smoke test (each app starts and stays up 20s)
         if: always()
         run: |
