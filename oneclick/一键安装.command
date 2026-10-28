@@ -1,6 +1,6 @@
 #!/bin/bash
 # 一键安装（Intel Mac）：DeepSeek Harness、Kimi Code、Antigravity、Antigravity IDE、
-# ChatGPT（含 Codex）、Grok Bot、Claude、微信、QQ、v2rayN（节点软件）
+# ChatGPT（含 Codex）、Grok Bot、Claude、微信、QQ、v2rayN（节点软件），并导入 Windows 上的 AI 数据
 #
 # 双击运行：检查电脑 → 校验安装包 → 逐个装进“应用程序” → 解除隔离 → 打开“应用程序”
 # · 某一个装失败不影响其他的，最后列出结果；失败的处理后再双击一次即可。
@@ -348,6 +348,51 @@ install_kimi() {
   fi
 }
 
+# Windows 电脑上导出的 AI 数据（对话记录、记忆、技能、项目文件）放回各软件在 Mac 上的位置
+# · Mac 上已有的同名文件不覆盖；同一块盘上用克隆复制，几乎不额外占空间
+# · 登录凭据没有导出，各软件第一次打开时登录一次即可
+import_ai_data() {
+  local src="$HERE/AI数据" label="AI 数据（对话记录、记忆、技能）" id marker need_kb free_kb d name total missing f ref
+  local t=$SECONDS
+  echo ""
+  echo "▶ $label"
+  if [ ! -d "$src/home" ]; then skip "AI 数据：文件夹里没有，跳过"; return; fi
+  id=$(head -n 1 "$src/EXPORT_ID" 2>/dev/null)
+  marker="$HOME/.oneclick-ai-import-${id:-unknown}"
+  if [ -f "$marker" ]; then skip "AI 数据 已经导入过（导出时间 ${id}），跳过"; return; fi
+  need_kb=$(du -sk "$src/home" 2>/dev/null | awk '{print $1}')
+  free_kb=$(df -k "$HOME" | awk 'NR==2 {print $4}')
+  if [ -n "$need_kb" ] && [ -n "$free_kb" ] && [ "$free_kb" -lt $(( need_kb + 2097152 )) ]; then
+    bad "AI 数据：磁盘空间不够（需要约 $(( need_kb / 1048576 + 2 ))GB），清理后再运行一次"
+    return
+  fi
+  for d in "$src/home"/.[!.]*; do
+    [ -d "$d" ] || continue
+    name=$(basename "$d")
+    mkdir -p "$HOME/$name"
+    # -n 不覆盖已有文件；-c 用 APFS 克隆（不支持时自动改为普通复制）
+    cp -Rpnc "$d/." "$HOME/$name/" 2>/dev/null
+    # 从 U 盘拷来的文件权限是“所有人可读写”，对话记录只留给自己
+    chmod -R go-rwx "$HOME/$name" 2>/dev/null
+  done
+  # 核对：每个文件都到位了才算成功
+  total=0; missing=0
+  while IFS= read -r f; do
+    total=$((total + 1))
+    [ -e "$HOME/${f#./}" ] || missing=$((missing + 1))
+  done < <(cd "$src/home" && find . -type f)
+  ref="$HOME/Documents/Windows AI 原配置（仅供参考）"
+  if [ -d "$src/Windows原配置（仅供参考）" ] && [ ! -e "$ref" ]; then
+    mkdir -p "$HOME/Documents" && ditto "$src/Windows原配置（仅供参考）" "$ref" 2>/dev/null
+  fi
+  if [ "$missing" -eq 0 ]; then
+    date > "$marker"
+    ok "AI 数据 ${total} 个文件 → ~/.claude、~/.codex、~/.grok、~/.gemini、~/.kimi-code、~/.dsh $(elapsed $t)"
+  else
+    bad "AI 数据：${total} 个文件里有 ${missing} 个没导入成功，再运行一次试试"
+  fi
+}
+
 # ---------- 3. 逐个安装 ----------
 # 参数：名称  安装包文件名  最低 macOS 版本（装的时候还会再按软件自己声明的最低版本检查一次）
 dsh_dmg=$(cd "$PKG" && ls -1 deepseek-harness-*.dmg 2>/dev/null | head -n 1)
@@ -381,6 +426,7 @@ else
   skip "QQ：官网安装包暂时下载不了，结束后会打开 App Store 的 QQ 页面，点“获取”即可（需要联网）"
   qq_from_store=1
 fi
+import_ai_data
 
 # ---------- 4. 结果 ----------
 echo ""
@@ -392,7 +438,8 @@ echo "=========================================="
 echo ""
 echo "· 桌面软件都在“应用程序”里，也可以按 Command+空格 搜索名字打开。"
 echo "· Kimi Code 是命令行工具：新开一个“终端”窗口，输入 kimi 回车。"
-echo "· 各软件第一次打开时登录自己的账号。"
+echo "· 各软件第一次打开时登录自己的账号（登录凭据没有从 Windows 导出，聊天类软件登录后记录会自动同步）。"
+echo "· Windows 上的 AI 对话记录、记忆、技能已放回各软件目录；Windows 版的配置文件在 文稿/Windows AI 原配置（仅供参考）。"
 echo "· DeepSeek Harness：设置 → 模型，填入 DeepSeek API 密钥。"
 echo "· v2rayN：导入你的节点（订阅地址或分享链接）后开启系统代理，海外软件才能登录。"
 echo "· 全过程记录在 桌面/一键安装日志.txt"
