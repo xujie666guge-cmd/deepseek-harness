@@ -4,7 +4,7 @@
 #
 # 双击运行：检查电脑 → 校验安装包 → 逐个装进“应用程序” → 解除隔离 → 打开“应用程序”
 # · 某一个装失败不影响其他的，最后列出结果；失败的处理后再双击一次即可。
-# · 已经装好且版本相同的会自动跳过，重复运行很快。
+# · Mac 上已经装好的软件一律保持不动（不管版本新旧），只补装没有的或已损坏的；重复运行很快。
 # · 先复制到隐藏的临时名字，完整复制好才换上，中途关窗口或断电不会留下装了一半的软件。
 # · 全过程记录在 桌面/一键安装日志.txt。
 # 兼容 macOS 自带的 bash 3.2。
@@ -184,7 +184,29 @@ app_version() {
   if [ -n "$b" ] && [ "$b" != "$v" ]; then echo "$v ($b)"; else echo "$v"; fi
 }
 
-# 把旧版移到废纸篓；不是自己装的（例如 App Store 装的，属于系统管理员）就用管理员权限再试
+# 这个软件是否已经装好（“应用程序”或个人的“应用程序”里有，且程序文件完整）；找到的路径放在 found_app
+found_app=""
+app_installed() {
+  local p exe
+  for p in "/Applications/$1" "$HOME/Applications/$1"; do
+    [ -d "$p" ] || continue
+    exe=$(plist_value "$p" CFBundleExecutable)
+    if [ -n "$exe" ] && [ -x "$p/Contents/MacOS/$exe" ]; then found_app="$p"; return 0; fi
+  done
+  return 1
+}
+# 参数：名称  安装包里的版本（不知道时留空）
+skip_installed() {
+  local have
+  have=$(app_version "$found_app")
+  if [ -z "$2" ] || [ "$have" = "$2" ]; then
+    skip "$1 已经装好（${have:-未知版本}），保持不动"
+  else
+    skip "$1 已经装好（${have:-未知版本}），保持不动；安装包里是 ${2}，想换成它就先把旧的拖到废纸篓再运行"
+  fi
+}
+
+# 把损坏的旧版移到废纸篓；不是自己装的（例如 App Store 装的，属于系统管理员）就用管理员权限再试
 retire_app() {
   local name stamp dest
   name=$(basename "$1" .app)
@@ -202,7 +224,7 @@ retire_app() {
 # 把一个 .app 装进“应用程序”：版本相同就跳过；否则先复制到隐藏临时名字 → 关掉旧的 → 旧版移到废纸篓 → 换上新版
 # 第三个参数为 move 时直接移动（来源是自己解压的临时目录，同一块盘上移动是瞬间完成的）
 place_app() {
-  local label="$1" src="$2" mode="${3:-copy}" name target stage new_v old_v min exe
+  local label="$1" src="$2" mode="${3:-copy}" name target stage new_v min
   name=$(basename "$src")
   target="/Applications/$name"
   new_v=$(app_version "$src")
@@ -211,15 +233,12 @@ place_app() {
     skip "${label}：需要 macOS $min 或更新（当前 ${os_version}），升级系统后再运行一次"
     return 0
   fi
-  if [ -d "$target" ]; then
-    old_v=$(app_version "$target")
-    exe=$(plist_value "$target" CFBundleExecutable)
-    # 版本相同、程序文件也在，才算装好了
-    if [ "$old_v" = "$new_v" ] && [ -n "$exe" ] && [ -x "$target/Contents/MacOS/$exe" ]; then
-      skip "$label 已是这个版本 ${new_v}，跳过"
-      return 0
-    fi
+  # 已经装好的软件一律不动（不管版本新旧），只有程序文件缺失的坏软件才重装
+  if app_installed "$name"; then
+    skip_installed "$label" "$new_v"
+    return 0
   fi
+  [ -d "$target" ] && echo "   已有的 $name 已损坏（找不到程序文件），重新安装"
   stage="/Applications/.${name}.oneclick-$$"
   CUR_STAGE="$stage"
   if [ "$mode" = "move" ] && $SUDO mv "$src" "$stage" 2>/dev/null; then
@@ -241,7 +260,7 @@ place_app() {
     fi
     if ! retire_app "$target"; then
       $SUDO rm -rf "$stage" 2>/dev/null; CUR_STAGE=""
-      bad "${label}：旧版本移不走。请在“系统设置 → 隐私与安全性 → App 管理”里打开“终端”，或手动把“应用程序”里的 ${name} 拖到废纸篓，再运行一次"
+      bad "${label}：损坏的旧版本移不走。请在“系统设置 → 隐私与安全性 → App 管理”里打开“终端”，或手动把“应用程序”里的 ${name} 拖到废纸篓，再运行一次"
       return 1
     fi
   fi
@@ -286,9 +305,14 @@ install_dmg() {
 
 # 从 zip 安装：解压到临时目录 → 移动 .app → 删掉临时目录
 install_zip() {
-  local label="$1" file="$2" min_os="$3" tmp app found=0 t=$SECONDS
+  local label="$1" file="$2" min_os="$3" app_name="${4:-}" tmp app found=0 t=$SECONDS
   echo ""
   echo "▶ $label"
+  # 已装好就不必先解压整个压缩包
+  if [ -n "$app_name" ] && app_installed "$app_name"; then
+    skip_installed "$label" ""
+    return
+  fi
   if ! os_at_least "$min_os"; then
     skip "${label}：需要 macOS $min_os 或更新（当前 ${os_version}），升级系统后再运行一次"
     return
@@ -317,10 +341,13 @@ install_kimi() {
   local label="Kimi Code（命令行）" dir="$HOME/.kimi-code" tmp bin rc line
   echo ""
   echo "▶ $label"
-  if [ -f "$dir/bin/kimi" ] && [ "$(shasum -a 256 "$dir/bin/kimi" | awk '{print $1}')" = "$KIMI_SHA" ]; then
-    skip "$label 已是 2.3.3，跳过"
-    return
-  fi
+  # 已经装了能用的 kimi（不管版本、不管装在哪）就不动
+  for bin in "$dir/bin/kimi" /usr/local/bin/kimi "$HOME/.local/bin/kimi"; do
+    if [ -x "$bin" ] && "$bin" --version >/dev/null 2>&1; then
+      skip "$label 已经装好（${bin}），保持不动"
+      return
+    fi
+  done
   if ! file_ok "$KIMI_FILE"; then bad "${label}：安装包缺失或损坏（${KIMI_FILE}）"; return; fi
   tmp=$(mktemp -d "$WORK/kimi.XXXXXX")
   tar -xzf "$PKG/$KIMI_FILE" -C "$tmp" 2>/dev/null || { bad "${label}：解压失败"; return; }
@@ -331,6 +358,7 @@ install_kimi() {
   done < <(find "$tmp" -type f -size +1M)
   [ -n "$bin" ] || { bad "${label}：程序校验不通过"; return; }
   mkdir -p "$dir/bin"
+  # 走到这里说明原来的 kimi 不存在或已经坏了，留一份以防万一
   [ -f "$dir/bin/kimi" ] && cp "$dir/bin/kimi" "$dir/bin/kimi.bak"
   install -m 0755 "$bin" "$dir/bin/kimi" || { bad "${label}：复制失败"; return; }
   xattr -d com.apple.quarantine "$dir/bin/kimi" 2>/dev/null
@@ -408,7 +436,7 @@ install_dmg "Antigravity"         "Antigravity-2.26.0-Intel.dmg"     13
 install_dmg "Antigravity IDE"     "Antigravity-IDE-2.5.5-Intel.dmg"  12
 install_dmg "ChatGPT（含 Codex）" "ChatGPT-Codex-Intel.dmg"          13
 install_dmg "Grok Bot"            "Grok-Bot-0.77.0-Intel.dmg"        12
-install_zip "Claude"              "Claude-3.6556.2-Universal.zip"    13
+install_zip "Claude"              "Claude-3.6556.2-Universal.zip"    13  "Claude.app"
 install_dmg "v2rayN（节点软件）"  "v2rayN-7.25.6-Intel.dmg"          13.6
 install_dmg "微信"                "WeChat-Universal.dmg"             12
 # QQ 官方安装包有就装；没有（官网链接失效时）就在最后打开 App Store 的 QQ 页面
